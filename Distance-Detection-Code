@@ -1,0 +1,183 @@
+from picamera.array import PiRGBArray
+from picamera import PiCamera
+import time
+import numpy as np
+import cv2
+from gpiozero import LED
+
+#setting up output pins and flag for the amplifier circuit
+out = 5
+rl_output = LED(2)  #high if else statement is executed (no one is detected)
+cf_output = LED(3)  #high for right, low for left
+no_person = LED(4)  #high for close, low for far
+
+
+# initialize the camera and grab a reference to the raw camera capture
+camera = PiCamera()
+camera.resolution = (320, 240)
+camera.framerate = 20 #20fps. higher leads too overheating of the pi.
+camera.rotation = 180 #rotates the image
+
+rawCapture = PiRGBArray(camera, size=(320, 240))
+# allow the camera to warmup
+time.sleep(0.1)
+hog = cv2.HOGDescriptor()
+hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
+
+# Known height of the human (in meters)
+KNOWN_HEIGHT = 1.7  # Assuming an average human height of 1.7 meters
+distance_prev = 20
+
+#setting up distance and left/right flags
+greater_7 = 0
+greater_3 = 0
+no_person_flag = 0
+rl_flag = 0 #setting left and right flag. 1 for right, 2 for left
+
+# capture frames from the camera
+for frame in camera.capture_continuous(rawCapture, format="bgr", use_video_port=True):
+
+    image = frame.array
+    frame = cv2.resize(image, (640,480))
+    distance = 0
+
+    #creates boxes around people in frame
+    boxes, weights = hog.detectMultiScale(frame, winStride=(8,8))
+    boxes = np.array([[x, y, x + w, y + h] for (x, y, w, h) in boxes])
+    distance_list = []  #creating empty list for distance values
+    mid_x_list = [] #creating empty list for tracking where the box is located
+
+    #iterates through each box created in a singular frame.
+    for (xA, yA, xB, yB) in boxes:
+
+        # Calculate the midpoint of the bounding box
+        mid_x = int((xA + xB) / 2)
+        mid_y = int((yA + yB) / 2)
+
+        # Draw a circle at the midpoint
+        cv2.circle(frame, (mid_x, mid_y), 5, (0, 0, 255), -1)
+
+        # Calculate the distance using the known height and the height of the bounding box
+        box_height = yB - yA
+        distance = (KNOWN_HEIGHT * 480) / (2 * box_height * np.tan(30 * np.pi / 180))
+
+        # Display distance on the frame
+        #cv2.putText(frame, f"Distance: {distance:.2f} meters", (xA, yA - 10),
+        #            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+        #print(f"Distance: \n", distance)
+
+
+        # display the detected boxes in the colour picture
+        cv2.rectangle(frame, (xA, yA), (xB, yB),(0, 255, 0), 2)
+
+        #adding values related to the current box to the lists
+        distance_list.append(distance)
+        mid_x_list.append(mid_x)
+
+    for i in distance_list:
+        if i < 1.5:        #ignore distance values closer than 1.5 (roughly 3m). Prevents issues with people being closer than the lowest interval below
+            index = distance_list.index(i)  #finding the index of the invalid value
+            distance_list.remove(i)     #removes value from the distance list
+            mid_x_list.pop(index)       #removes the value in the corresponding element of the middle value list
+
+    #finding the closest person
+    if distance_list != []:
+        new_distance = min(distance_list)
+        dist_index = distance_list.index(new_distance)
+        centre = mid_x_list[dist_index]
+    else:
+        new_distance = 0    #defaults to small initial distance
+        centre = 310        #defaults to centre value <-- centre found through testing
+
+
+    if new_distance > 4.0:    #for greater than 7 meters (7m is 3.8-4. used 4 to ensure early rather than late detection.)
+        #print("greater than 5")
+        greater_7 += 1
+    elif new_distance > 1.5:  #for greater than 3 meters (3m is 2 but included to 1.5 as people are sometimes detected at that distance and it is still above 2m).
+        #print("greater than 3")
+        greater_3 +=1
+    else:
+        no_person_flag +=1    #if no one is greater than roughly 3 meters away increase no_person flag
+
+
+    #left and right flag conditions
+    #midpoint found to be mid_x = 310. Found through thorough testing with different people.
+    # -- adjust range after testing outside --
+    if centre < 300:
+        #right
+        rl_flag = 1
+    elif centre > 320:
+        #left
+        rl_flag = 2
+    else:           #when between 300 and 320 the flag will remain the same so the sound is not constantly changing if someone is right behind you.
+        rl_flag = rl_flag
+
+
+    #counts 2 frames before outputting an alert <-- combats erroneous readings
+    if (no_person_flag == 2):   #if the camera briefly stops reading it doesn't instantly say no one is there, instead counts 2 frames.
+        greater_3 = 0
+        greater_7 = 0
+        no_person_flag = 0
+        out = 5
+
+        #print("no person")
+
+    elif (greater_7 == 2 and rl_flag == 2):
+        greater_7 = 0    
+        greater_3 = 0
+        no_person_flag = 0
+        out = 0
+        print("left, greater than 7")
+
+    elif (greater_3 == 2 and rl_flag == 2):
+        greater_7 = 0
+        greater_3 = 0
+        no_person_flag = 0
+        out = 1
+        print("left, 3 to 7")
+
+    elif (greater_7 == 2 and rl_flag == 1):
+        greater_7 = 0
+        greater_3 = 0
+        no_person_flag = 0
+        out = 2
+        print("right, greater than 7")
+
+    elif (greater_3 == 2 and rl_flag == 1):
+        greater_7 = 0
+        greater_3 = 0
+        no_person_flag = 0
+        out = 3
+        print("right, 3 to 7")
+
+    else: #for when greater flags are counting back up to 2
+        out = out
+        #print("reached else 1")
+
+    #setting pins based on out values.
+    #these values are sent to the arduino to control operation of the audio signals.
+    if out == 0:        #left, far
+        rl_output.off()
+        cf_output.off()
+        no_person.off()
+    elif out == 1:      #left, close
+        rl_output.off()
+        cf_output.on()
+        no_person.off()
+    elif out == 2:      #right, far
+        rl_output.on()
+        cf_output.off()
+        no_person.off()
+    elif out ==3:       #right
+        rl_output.on()
+        cf_output.on()
+        no_person.off()
+    elif out == 5:      #no one there
+        no_person.on()
+
+
+    cv2.imshow("Frame", frame);
+    key = cv2.waitKey(1) & 0xFF
+    rawCapture.truncate(0)
+    if key == ord("q"):
+        break
