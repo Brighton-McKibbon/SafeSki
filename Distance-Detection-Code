@@ -90,7 +90,7 @@ for frame in camera.capture_continuous(rawCapture, format="bgr", use_video_port=
         centre = 310        #defaults to centre value <-- centre found through testing
 
 
-    if new_distance > 4.0:    #for greater than 7 meters (7m is 3.8-4. used 4 to ensure early rather than late detection.)
+    if new_distance > 4.2:    #for greater than 7 meters (7m is 3.8-4. used 4.2 to ensure early rather than late detection.)
         #print("greater than 5")
         greater_7 += 1
     elif new_distance > 1.5:  #for greater than 3 meters (3m is 2 but included to 1.5 as people are sometimes detected at that distance and it is still above 2m).
