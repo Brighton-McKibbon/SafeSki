@@ -7,9 +7,9 @@ from gpiozero import LED
 
 #setting up output pins and flag for the amplifier circuit
 out = 5
-rl_output = LED(2)  #high if else statement is executed (no one is detected)
-cf_output = LED(3)  #high for right, low for left
-no_person = LED(4)  #high for close, low for far
+rl_output = LED(14)  #high if else statement is executed (no one is detected)
+cf_output = LED(15)  #high for right, low for left
+no_person = LED(18)  #high for close, low for far
 
 
 # initialize the camera and grab a reference to the raw camera capture
